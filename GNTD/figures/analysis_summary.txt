@@ -1,0 +1,67 @@
+============================================================
+GNTD Spatial Transcriptomics Imputation Results
+============================================================
+
+Evaluation Metrics (without ground truth labels):
+- MSE: Lower is better (imputation accuracy)
+- Silhouette Score: Higher is better (cluster cohesion/separation)
+- Auto Clusters: Number of clusters automatically selected by Mclust
+
+Lambda = 0:
+  MSE: 0.076420
+  Auto Selected Clusters: 9
+  Actual Clusters: 9
+  Silhouette Score: 0.1040
+
+Lambda = 0.005:
+  MSE: 0.076363
+  Auto Selected Clusters: 9
+  Actual Clusters: 9
+  Silhouette Score: 0.0976
+
+Lambda = 0.01:
+  MSE: 0.076485
+  Auto Selected Clusters: 9
+  Actual Clusters: 9
+  Silhouette Score: 0.1096
+
+Lambda = 0.05:
+  MSE: 0.077605
+  Auto Selected Clusters: 9
+  Actual Clusters: 9
+  Silhouette Score: 0.1309
+
+Lambda = 0.1:
+  MSE: 0.079924
+  Auto Selected Clusters: 9
+  Actual Clusters: 9
+  Silhouette Score: 0.1620
+
+Lambda = 0.5:
+  MSE: 0.101609
+  Auto Selected Clusters: 9
+  Actual Clusters: 9
+  Silhouette Score: 0.1562
+
+Lambda = 1:
+  MSE: 0.122586
+  Auto Selected Clusters: 9
+  Actual Clusters: 9
+  Silhouette Score: 0.1697
+
+Lambda = 5:
+  MSE: 0.204423
+  Auto Selected Clusters: 9
+  Actual Clusters: 9
+  Silhouette Score: 0.2209
+
+
+最佳lambda (按MSE): 0.005
+最佳MSE: 0.076363
+
+最佳lambda (按Silhouette): 5
+最佳Silhouette: 0.2209
+
+
+可视化基因: ['LAMP2', 'GFAP', 'SYN1']
+基因对比图保存位置: figures/gene_comparison

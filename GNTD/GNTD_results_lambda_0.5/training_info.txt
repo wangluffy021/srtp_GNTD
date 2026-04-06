@@ -1,0 +1,6 @@
+Lambda: 0.5
+Rank: 128
+Best MSE: 0.10160928964614868
+Imputed matrix shape: (2702, 3000)
+Number of genes: 3000
+Number of spots: 2702
