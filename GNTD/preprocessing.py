@@ -151,23 +151,38 @@ def preprocessing(raw_data_path, PPI_data_path, load_labels=False,
     mapping[aligned_coords, -1] = sp_in_tissue[idx] - 2
     
     # Note that this code snippet only works
+        # Note that this code snippet only works for DLPFC sections from spatialLIBD project
     if load_labels:
         
         cl_info_path = os.path.join(sp_info_dir, 'cluster_labels.csv')
-        cl_barcodes = np.array([row['key'].split('_')[1] for row in csv.DictReader(open(cl_info_path, 'rt'), delimiter=",")])
-        cl_labels = np.array([row['ground_truth'] for row in csv.DictReader(open(cl_info_path, 'rt'), delimiter=",")])
-        cl_labels[np.where(cl_labels == 'WM')] = "Layer_0"
-        cl_barcodes = cl_barcodes[np.where(cl_labels != 'NA')]
-        cl_labels = cl_labels[np.where(cl_labels != 'NA')]
-        cl_labels = np.array([int(label.split('_')[1]) for label in cl_labels])
-
-        # Align spatial coordinates between rows
+        print(f"正在加载 cluster_labels.csv: {cl_info_path}")
+        
+        with open(cl_info_path, 'rt') as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+        
+        # 适配您的文件格式：列名为 "Barcode" 和 "Cluster"
+        cl_barcodes = np.array([row['Barcode'] for row in rows])
+        cl_labels = np.array([row['Cluster'] for row in rows])
+        
+        # 过滤无效标签（如果有）
+        valid_idx = np.where(cl_labels != 'NA')[0]
+        cl_barcodes = cl_barcodes[valid_idx]
+        cl_labels = cl_labels[valid_idx]
+        
+        # 转为整数类型
+        cl_labels = cl_labels.astype(int)
+        
+        print(f"成功加载 {len(cl_labels)} 个 spot 的层标签 (Cluster 1~{cl_labels.max()})")
+        
+        # Align spatial coordinates
         idx = [np.where(np.array(sp_barcodes) == barcode)[0][0] for barcode in cl_barcodes]
         x_coords = sp_x_coords[idx]
         y_coords = sp_y_coords[idx]
         x_aligned_coords = x_coords
-        y_aligned_coords = y_coords//2
-        aligned_coords = x_aligned_coords*n_y + y_aligned_coords
+        y_aligned_coords = y_coords // 2
+        aligned_coords = x_aligned_coords * n_y + y_aligned_coords
+        
         mapping[aligned_coords, -1] = cl_labels
     
     

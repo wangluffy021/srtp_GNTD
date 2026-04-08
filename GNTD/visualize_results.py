@@ -1,361 +1,141 @@
 import os
 import numpy as np
-from sklearn.decomposition import PCA
-from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
 import matplotlib.pyplot as plt
+from scipy.io import loadmat
 import warnings
-import json
 
-warnings.filterwarnings('ignore', category=UserWarning)
-warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore')
 
-# ==================== 配置 ====================
-figures_folder = "figures"
-gene_compare_folder = os.path.join(figures_folder, "gene_comparison")
-os.makedirs(gene_compare_folder, exist_ok=True)
+# ========================== 配置 ==========================
+results_dir = "results_GNTD_mouse_ARI"
+figures_dir = "figures_ARI"
+os.makedirs(figures_dir, exist_ok=True)
 
-# R环境设置
-os.environ['R_HOME'] = '/home/wangluffy/miniconda3/envs/GNTD/lib/R'
-import rpy2.robjects as robjects
-robjects.r.library("mclust")
-import rpy2.robjects.numpy2ri
-rpy2.robjects.numpy2ri.activate()
-robjects.r['set.seed'](0)
-Mclust = robjects.r['Mclust']
+# 需要可视化的基因（可自行增删）
+genes_to_visualize = ['gfap', 'syn1', 'mbp', 'nefh', 'lamp2']
 
-# 参数配置
-l_num = [0, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5]
-genes_to_visualize = ['LAMP2', 'GFAP', 'SYN1']
+print("正在加载所有 rank=128 的实验结果...\n")
 
-# ==================== 主分析循环 ====================
-print("Loading results for each lambda...")
-results = {}
-mse_dict = {}
-best_mse_list = []
+# ====================== 1. 收集所有 rank=128 的结果 ======================
+mat_files = [f for f in os.listdir(results_dir) if f.endswith('.mat') and '_r128_' in f]
 
-for l in l_num:
-    save_folder = f"GNTD_results_lambda_{l}"
-    
-    # 加载数据
-    expr_mat = np.load(os.path.join(save_folder, "imputed_expr_mat.npy"))
-    gene_names = np.load(os.path.join(save_folder, "gene_names.npy"), allow_pickle=True)
-    x_coords = np.load(os.path.join(save_folder, "x_coords.npy"))
-    y_coords = np.load(os.path.join(save_folder, "y_coords.npy"))
-    
-    # 加载原始表达矩阵（如果存在）
-    raw_expr_mat = None
-    raw_file = os.path.join(save_folder, "raw_expr_mat.npy")
-    if os.path.exists(raw_file):
-        raw_expr_mat = np.load(raw_file)
-    
-    # 读取MSE
-    mse = np.nan
-    info_file = os.path.join(save_folder, "training_info.txt")
-    if os.path.exists(info_file):
-        with open(info_file, 'r') as f:
-            for line in f:
-                if 'Best MSE:' in line:
-                    mse = float(line.split(':')[1].strip())
-                    break
-    if np.isnan(mse):
-        mse_file = os.path.join(save_folder, "best_mse.npy")
-        if os.path.exists(mse_file):
-            mse = float(np.load(mse_file))
-    if np.isnan(mse):
-        json_file = os.path.join(save_folder, "results.json")
-        if os.path.exists(json_file):
-            with open(json_file, 'r') as f:
-                mse = json.load(f).get('best_mse', np.nan)
-    
-    mse_dict[l] = mse
-    best_mse_list.append(mse)
-    
-    # 数据清理
-    expr_mat = np.nan_to_num(expr_mat, nan=0.0, posinf=0.0, neginf=0.0)
-    expr_mat = np.clip(expr_mat, -1e10, 1e10)
-    
-    # PCA降维
-    n_components = min(10, expr_mat.shape[1])
-    expr_mat_hat = PCA(n_components=n_components).fit_transform(expr_mat)
-    expr_mat_hat = np.nan_to_num(expr_mat_hat, nan=0.0, posinf=0.0, neginf=0.0)
-    
-    # Mclust自动聚类
-    try:
-        mclust = Mclust(rpy2.robjects.numpy2ri.numpy2rpy(expr_mat_hat), modelNames="EEE")
-        clustering_labels = np.array(mclust[-2])
-        n_clusters = len(np.unique(clustering_labels))
-        
-        if n_clusters >= 2:
-            sil_score = silhouette_score(expr_mat_hat, clustering_labels)
-            db_score = davies_bouldin_score(expr_mat_hat, clustering_labels)
-            ch_score = calinski_harabasz_score(expr_mat_hat, clustering_labels)
-        else:
-            sil_score = db_score = ch_score = np.nan
-    except Exception as e:
-        print(f" Lambda {l} clustering failed: {e}")
-        clustering_labels = None
-        n_clusters = 0
-        sil_score = db_score = ch_score = np.nan
-    
-    results[l] = {
-        'expr_mat': expr_mat,
-        'raw_expr_mat': raw_expr_mat,
-        'gene_names': gene_names,
-        'clustering_labels': clustering_labels,
-        'x_coords': x_coords,
-        'y_coords': y_coords,
-        'mse': mse,
-        'n_clusters': n_clusters,
-        'best_n_clusters': n_clusters,
-        'silhouette': sil_score,
-        'davies_bouldin': db_score,
-        'calinski_harabasz': ch_score
-    }
-    
-    print(f" Lambda {l}: MSE={mse:.6f}, Clusters={n_clusters}, Silhouette={sil_score:.4f}" 
-          if not np.isnan(sil_score) else 
-          f" Lambda {l}: MSE={mse:.6f}, Clusters={n_clusters}")
+if not mat_files:
+    print("错误：results_GNTD_mouse_ARI 文件夹中没有 rank=128 的 .mat 文件")
+    exit()
 
-# ==================== 选择最佳lambda ====================
-valid_mse = [i for i, m in enumerate(best_mse_list) if not np.isnan(m)]
-best_idx = valid_mse[np.argmin([best_mse_list[i] for i in valid_mse])] if valid_mse else 0
-best_lambda_mse = l_num[best_idx]
+results = []
+for f in mat_files:
+    data = loadmat(os.path.join(results_dir, f))
+    lam = float(data['lambda'].item())
+    ari = float(data.get('ARI', np.nan).item())
+    mse = float(data['best_mse'].item())
+    results.append({'lambda': lam, 'ARI': ari, 'MSE': mse, 'file': f, 'data': data})
 
-valid_sil = [(l, results[l]['silhouette']) for l in l_num if not np.isnan(results[l]['silhouette'])]
-best_lambda_sil = max(valid_sil, key=lambda x: x[1])[0] if valid_sil else best_lambda_mse
+# 按 lambda 排序
+results.sort(key=lambda x: x['lambda'])
 
-print(f"\n最佳lambda (按MSE): {best_lambda_mse} (MSE={results[best_lambda_mse]['mse']:.6f})")
-if valid_sil:
-    print(f"最佳lambda (按Silhouette): {best_lambda_sil} (Silhouette={results[best_lambda_sil]['silhouette']:.4f})")
+lambdas = [r['lambda'] for r in results]
+aris = [r['ARI'] for r in results]
+mses = [r['MSE'] for r in results]
 
-# ==================== 基因表达可视化 ====================
-print("\n" + "="*60)
-print("生成基因表达对比图...")
-print("="*60)
+# 找到最佳 lambda（ARI 最高）
+best_idx = np.argmax(aris)
+best_lam = lambdas[best_idx]
+best_ari = aris[best_idx]
+best_mse = mses[best_idx]
+best_data = results[best_idx]['data']
 
-best_result = results[best_lambda_mse]
-gene_names_lower = np.char.lower(best_result['gene_names'])
+print(f"最佳模型 → λ={best_lam}, rank=128, ARI={best_ari:.4f}, MSE={best_mse:.5f}\n")
 
-for gene_name in genes_to_visualize:
-    gene_idx = np.where(gene_names_lower == gene_name.lower())[0]
-    if len(gene_idx) == 0:
-        print(f" 警告: 基因 '{gene_name}' 未找到")
+# ====================== 2. 绘制 ARI 和 MSE 折线图 ======================
+print("正在生成 ARI 和 MSE vs Lambda 折线图...")
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+# ARI 图
+axes[0].plot(lambdas, aris, 'o-', color='tab:blue', linewidth=2, markersize=8, label='ARI')
+axes[0].set_xlabel('Lambda (λ)', fontsize=12)
+axes[0].set_ylabel('Adjusted Rand Index (ARI)', fontsize=12)
+axes[0].set_title('ARI vs Lambda (rank=128)', fontsize=14)
+axes[0].grid(True, linestyle='--', alpha=0.7)
+axes[0].legend()
+
+# MSE 图
+axes[1].plot(lambdas, mses, 'o-', color='tab:red', linewidth=2, markersize=8, label='MSE')
+axes[1].set_xlabel('Lambda (λ)', fontsize=12)
+axes[1].set_ylabel('Validation MSE', fontsize=12)
+axes[1].set_title('MSE vs Lambda (rank=128)', fontsize=14)
+axes[1].grid(True, linestyle='--', alpha=0.7)
+axes[1].legend()
+
+plt.suptitle(f'GNTD Mouse Tissue | rank=128 | Best ARI = {best_ari:.4f} at λ={best_lam}', fontsize=15)
+plt.tight_layout()
+plt.savefig(os.path.join(figures_dir, 'ARI_MSE_vs_Lambda_rank128.png'), dpi=300, bbox_inches='tight')
+plt.close()
+print(f"已保存: ARI_MSE_vs_Lambda_rank128.png\n")
+
+# ====================== 3. 使用最佳 lambda 生成 Raw vs Imputed 对比图（仅两图） ======================
+print(f"使用最佳 λ={best_lam} 的结果生成基因表达对比图（Raw vs Imputed）...\n")
+
+raw_genes = best_data['gene_names']
+gene_names_lower = [str(g).strip().lower() for g in raw_genes.flatten()]
+gene_names_original = [str(g).strip() for g in raw_genes.flatten()]
+
+expr_imputed = best_data['expr_mat']
+expr_raw = best_data.get('expr_raw_mat')
+x_coords = best_data['x_coords'].flatten()
+y_coords = best_data['y_coords'].flatten()
+
+for gene_lower in genes_to_visualize:
+    if gene_lower not in gene_names_lower:
+        print(f"  跳过：基因 {gene_lower.upper()} 未找到")
         continue
-    gene_idx = gene_idx[0]
-    actual_gene_name = best_result['gene_names'][gene_idx]
     
-    imputed_expr = best_result['expr_mat'][:, gene_idx]
-    raw_expr = None
-    if best_result['raw_expr_mat'] is not None:
-        raw_expr = (best_result['raw_expr_mat'][:, gene_idx] 
-                   if best_result['raw_expr_mat'].ndim == 2 and best_result['raw_expr_mat'].shape[1] == len(gene_names_lower)
-                   else None)
+    idx = gene_names_lower.index(gene_lower)
+    actual_name = gene_names_original[idx]
     
-    # 单lambda对比图
-    n_plots = 3 if raw_expr is not None else 2
-    fig, axes = plt.subplots(1, n_plots, figsize=(15 if n_plots==3 else 12, 5))
-    if n_plots == 2:
-        axes = [axes[0], axes[1]]
+    imp_clean = np.nan_to_num(expr_imputed[:, idx], nan=0.0)
     
-    # Raw
-    if raw_expr is not None:
+    # 只绘制 Raw 和 Imputed 两张图
+    fig, axes = plt.subplots(1, 2, figsize=(15, 7))
+    
+    # Raw 图
+    if expr_raw is not None and expr_raw.shape == expr_imputed.shape:
+        raw_clean = np.nan_to_num(expr_raw[:, idx], nan=0.0)
         ax = axes[0]
-        raw_clean = np.nan_to_num(raw_expr, nan=0.0)
-        vmin, vmax = np.percentile(raw_clean, [5, 95])
-        sc = ax.scatter(best_result['x_coords'], best_result['y_coords'], c=raw_clean,
-                        cmap='RdYlBu_r', s=20, alpha=0.7, vmin=vmin, vmax=vmax)
-        ax.set_title(f'Raw: {actual_gene_name}')
+        vmin, vmax = np.percentile(raw_clean[raw_clean > 0], [5, 95]) if np.any(raw_clean > 0) else (0, raw_clean.max())
+        sc = ax.scatter(x_coords, y_coords, c=raw_clean, cmap='RdYlBu_r', s=28, alpha=0.85, vmin=vmin, vmax=vmax)
+        ax.set_title(f'Raw: {actual_name.upper()}')
         plt.colorbar(sc, ax=ax, label='Expression')
+        ax.invert_yaxis()
         ax.set_xticks([]); ax.set_yticks([])
-        ax.set_ylim(ax.get_ylim()[::-1])
-        ax2 = axes[1]
     else:
-        ax2 = axes[0]
+        print(f"  警告：Raw 数据不可用，仅显示 Imputed 图")
+        ax = axes[0]
+        ax.set_title(f'Raw: {actual_name.upper()} (Not Available)')
+        ax.text(0.5, 0.5, 'Raw Data\nNot Available', ha='center', va='center', transform=ax.transAxes)
     
-    # Imputed
-    imp_clean = np.nan_to_num(imputed_expr, nan=0.0)
-    vmin, vmax = np.percentile(imp_clean, [5, 95])
-    sc = ax2.scatter(best_result['x_coords'], best_result['y_coords'], c=imp_clean,
-                     cmap='RdYlBu_r', s=20, alpha=0.7, vmin=vmin, vmax=vmax)
-    ax2.set_title(f'Imputed (λ={best_lambda_mse})')
-    plt.colorbar(sc, ax=ax2, label='Expression')
-    ax2.set_xticks([]); ax2.set_yticks([])
-    ax2.set_ylim(ax2.get_ylim()[::-1])
-    
-    # Difference
-    if raw_expr is not None:
-        ax3 = axes[2]
-        diff = imp_clean - np.nan_to_num(raw_expr, nan=0.0)
-        vmin, vmax = np.percentile(diff, [5, 95])
-        sc = ax3.scatter(best_result['x_coords'], best_result['y_coords'], c=diff,
-                         cmap='RdBu_r', s=20, alpha=0.7, vmin=vmin, vmax=vmax)
-        ax3.set_title('Difference (Imputed - Raw)')
-        plt.colorbar(sc, ax=ax3, label='Difference')
-        ax3.set_xticks([]); ax3.set_yticks([])
-        ax3.set_ylim(ax3.get_ylim()[::-1])
-    
-    plt.suptitle(f'Gene Expression Comparison: {actual_gene_name}', fontsize=14)
+    # Imputed 图
+    ax = axes[1]
+    vmin, vmax = np.percentile(imp_clean[imp_clean > 0], [5, 95]) if np.any(imp_clean > 0) else (0, imp_clean.max())
+    sc = ax.scatter(x_coords, y_coords, c=imp_clean, cmap='RdYlBu_r', s=28, alpha=0.85, vmin=vmin, vmax=vmax)
+    ax.set_title(f'Imputed (λ={best_lam}, rank=128)')
+    plt.colorbar(sc, ax=ax, label='Expression')
+    ax.invert_yaxis()
+    ax.set_xticks([]); ax.set_yticks([])
+
+    plt.suptitle(f'{actual_name.upper()} | Best λ={best_lam} | ARI={best_ari:.4f} | MSE={best_mse:.5f}', 
+                 fontsize=14)
     plt.tight_layout()
-    save_path = os.path.join(gene_compare_folder, f'{actual_gene_name}_comparison.png')
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f" 已保存: {save_path}")
-
-# 多lambda插补效果对比
-print("\n生成多lambda插补效果对比图...")
-for gene_name in genes_to_visualize:
-    # 查找基因索引（取第一个找到的）
-    gene_idx = None
-    actual_gene_name = None
-    for l in l_num:
-        if results[l]['gene_names'] is not None:
-            idxs = np.where(np.char.lower(results[l]['gene_names']) == gene_name.lower())[0]
-            if len(idxs) > 0:
-                gene_idx = idxs[0]
-                actual_gene_name = results[l]['gene_names'][gene_idx]
-                break
-    if gene_idx is None:
-        print(f" 基因 '{gene_name}' 未找到")
-        continue
     
-    fig, axes = plt.subplots(2, 4, figsize=(16, 10))
-    axes = axes.flatten()
-    for i, l in enumerate(l_num):
-        res = results[l]
-        expr = res['expr_mat'][:, gene_idx]
-        expr_clean = np.nan_to_num(expr, nan=0.0)
-        vmin = np.percentile(expr_clean, 5) if expr_clean.std() > 0 else expr_clean.min()
-        vmax = np.percentile(expr_clean, 95) if expr_clean.std() > 0 else expr_clean.max() + 1e-6
-        
-        sc = axes[i].scatter(res['x_coords'], res['y_coords'], c=expr_clean,
-                             cmap='RdYlBu_r', s=10, alpha=0.7, vmin=vmin, vmax=vmax)
-        axes[i].set_title(f'λ={l}\nMSE={res["mse"]:.5f}', fontsize=9)
-        axes[i].set_xticks([]); axes[i].set_yticks([])
-        axes[i].set_ylim(axes[i].get_ylim()[::-1])
-        plt.colorbar(sc, ax=axes[i], fraction=0.046, pad=0.04)
-    
-    plt.suptitle(f'{actual_gene_name} Imputation across Lambdas', fontsize=14)
-    plt.tight_layout()
-    save_path = os.path.join(gene_compare_folder, f'{actual_gene_name}_all_lambdas.png')
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    save_path = os.path.join(figures_dir, f'{actual_name.upper()}_BestLambda_Raw_vs_Imputed.png')
+    plt.savefig(save_path, dpi=220, bbox_inches='tight')
     plt.close()
-    print(f" 已保存: {save_path}")
+    print(f" 已保存: {actual_name.upper()}_BestLambda_Raw_vs_Imputed.png")
 
-# ==================== 保存总结与绘图 ====================
-os.makedirs(figures_folder, exist_ok=True)
-
-with open(os.path.join(figures_folder, "analysis_summary.txt"), 'w') as f:
-    f.write("GNTD Spatial Transcriptomics Imputation Analysis Summary\n")
-    f.write("="*60 + "\n\n")
-    f.write("Evaluation Metrics:\n")
-    f.write("- MSE: Lower is better\n")
-    f.write("- Silhouette: Higher is better\n\n")
-    for l in l_num:
-        r = results[l]
-        f.write(f"Lambda = {l}:\n")
-        f.write(f"  MSE: {r['mse']:.6f}\n")
-        f.write(f"  Clusters: {r['best_n_clusters']}\n")
-        if not np.isnan(r['silhouette']):
-            f.write(f"  Silhouette: {r['silhouette']:.4f}\n")
-        f.write("\n")
-    f.write(f"最佳lambda (MSE): {best_lambda_mse}\n")
-    f.write(f"最佳lambda (Silhouette): {best_lambda_sil}\n")
-
-# MSE vs Lambda
-fig, ax = plt.subplots(figsize=(10, 6))
-valid_l = [l for l, m in mse_dict.items() if not np.isnan(m)]
-valid_mse = [mse_dict[l] for l in valid_l]
-ax.plot(valid_l, valid_mse, 'o-', color='blue')
-ax.set_xscale('log')
-ax.set_xlabel('Lambda (log scale)')
-ax.set_ylabel('Best MSE')
-ax.set_title('MSE vs Lambda')
-ax.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.savefig(os.path.join(figures_folder, 'mse_vs_lambda.png'), dpi=150)
-plt.close()
-
-# Silhouette vs Lambda
-fig, ax = plt.subplots(figsize=(10, 6))
-sil_scores = [results[l]['silhouette'] for l in l_num]
-ax.plot(l_num, sil_scores, 'o-', color='green')
-ax.set_xscale('log')
-ax.set_xlabel('Lambda (log scale)')
-ax.set_ylabel('Silhouette Score')
-ax.set_title('Silhouette Score vs Lambda')
-ax.grid(True, alpha=0.3)
-plt.tight_layout()
-plt.savefig(os.path.join(figures_folder, 'silhouette_vs_lambda.png'), dpi=150)
-plt.close()
-
-# 最佳MSE聚类图
-best = results[best_lambda_mse]
-fig, ax = plt.subplots(figsize=(8, 8))
-sc = ax.scatter(best['x_coords'], best['y_coords'], c=best['clustering_labels'], 
-                cmap='tab20', s=20, alpha=0.7)
-ax.set_ylim(ax.get_ylim()[::-1])
-ax.set_title(f'Best Clustering by MSE (λ={best_lambda_mse})\n'
-             f'MSE={best["mse"]:.6f}, Clusters={best["n_clusters"]}, Sil={best["silhouette"]:.4f}')
-plt.colorbar(sc, ax=ax, label='Cluster')
-plt.tight_layout()
-plt.savefig(os.path.join(figures_folder, 'clustering_best_mse.png'), dpi=150)
-plt.close()
-
-# 最佳Silhouette聚类图
-if valid_sil:
-    best_s = results[best_lambda_sil]
-    fig, ax = plt.subplots(figsize=(8, 8))
-    sc = ax.scatter(best_s['x_coords'], best_s['y_coords'], c=best_s['clustering_labels'], 
-                    cmap='tab20', s=20, alpha=0.7)
-    ax.set_ylim(ax.get_ylim()[::-1])
-    ax.set_title(f'Best Clustering by Silhouette (λ={best_lambda_sil})\n'
-                 f'Sil={best_s["silhouette"]:.4f}, Clusters={best_s["n_clusters"]}')
-    plt.colorbar(sc, ax=ax, label='Cluster')
-    plt.tight_layout()
-    plt.savefig(os.path.join(figures_folder, 'clustering_best_silhouette.png'), dpi=150)
-    plt.close()
-
-# 所有lambda聚类对比
-fig, axes = plt.subplots(2, 4, figsize=(16, 12))
-axes = axes.flatten()
-for i, l in enumerate(l_num):
-    if results[l]['clustering_labels'] is not None:
-        res = results[l]
-        sc = axes[i].scatter(res['x_coords'], res['y_coords'], c=res['clustering_labels'],
-                             cmap='tab20', s=10, alpha=0.7)
-        axes[i].set_title(f'λ={l}\nClusters={res["best_n_clusters"]}\nSil={res["silhouette"]:.3f}')
-        axes[i].set_xticks([]); axes[i].set_yticks([])
-        axes[i].set_ylim(axes[i].get_ylim()[::-1])
-        plt.colorbar(sc, ax=axes[i], fraction=0.046, pad=0.04)
-plt.suptitle('Clustering Results across All Lambda')
-plt.tight_layout()
-plt.savefig(os.path.join(figures_folder, 'clustering_comparison_all.png'), dpi=150)
-plt.close()
-
-# 代表性lambda对比 (4个)
-lambdas_to_show = [0, 0.01, 0.1, 1]
-fig, axes = plt.subplots(2, 2, figsize=(12, 12))
-axes = axes.flatten()
-for i, l in enumerate(lambdas_to_show):
-    if l in results and results[l]['clustering_labels'] is not None:
-        res = results[l]
-        sc = axes[i].scatter(res['x_coords'], res['y_coords'], c=res['clustering_labels'],
-                             cmap='tab20', s=15, alpha=0.7)
-        axes[i].set_title(f'λ={l}\nClusters={res["best_n_clusters"]}, Sil={res["silhouette"]:.3f}')
-        axes[i].set_xticks([]); axes[i].set_yticks([])
-        axes[i].set_ylim(axes[i].get_ylim()[::-1])
-        plt.colorbar(sc, ax=axes[i], fraction=0.046, pad=0.04)
-plt.suptitle('Clustering Comparison - Selected Lambdas')
-plt.tight_layout()
-plt.savefig(os.path.join(figures_folder, 'clustering_comparison_selected.png'), dpi=150)
-plt.close()
-
-# ==================== 最终总结输出 ====================
-print("\n" + "="*60)
-print("分析完成！")
-print("="*60)
-print(f"最佳lambda (按MSE): {best_lambda_mse} (MSE={results[best_lambda_mse]['mse']:.6f})")
-print(f"最佳lambda (按Silhouette): {best_lambda_sil} (Sil={results[best_lambda_sil]['silhouette']:.4f})")
-print(f"\n结果保存位置: {figures_folder}/")
-print(f"基因对比图保存位置: {gene_compare_folder}/")
-print("="*60)
+# ====================== 总结 ======================
+print(f"\n🎉 所有可视化完成！")
+print(f"最佳 ARI = {best_ari:.4f} （λ={best_lam}, rank=128）")
+print(f"折线图保存在：{figures_dir}/ARI_MSE_vs_Lambda_rank128.png")
+print(f"基因对比图保存在：{figures_dir}/ 文件夹（仅 Raw + Imputed）")
+print(f"推荐重点查看：GFAP、SYN1、MBP 的对比图")
