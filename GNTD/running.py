@@ -1,41 +1,83 @@
 # running.py - 多参数循环最终版（推荐使用）
 
-from GNTD import GNTD
-from sklearn.metrics import adjusted_rand_score
-from sklearn.decomposition import PCA
-from sklearn.cluster import KMeans
 import os
-import numpy as np
+import random
+import hashlib
 import warnings
+
+# 需要在导入 torch 之前设置，提升 CUDA 计算可复现性
+os.environ.setdefault("PYTHONHASHSEED", "42")
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
+import numpy as np
+import torch
 from scipy.io import savemat
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from sklearn.metrics import adjusted_rand_score
+
+from GNTD import GNTD
 
 warnings.filterwarnings('ignore')
 
+
+def set_global_determinism(seed: int = 42):
+    """固定所有常见随机源，尽量保证每次运行结果一致。"""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+
+    # 若遇到不支持的确定性算子会报错，便于显式发现不稳定来源
+    torch.use_deterministic_algorithms(True)
+
+
+def seed_from_config(rank: int, l_value: float, base_seed: int = 42) -> int:
+    """为每组参数生成稳定种子，避免实验顺序影响结果。"""
+    key = f"{base_seed}-{rank}-{l_value:.8f}".encode("utf-8")
+    hashed = int(hashlib.md5(key).hexdigest()[:8], 16)
+    return (base_seed + hashed) % (2**31 - 1)
+
+
 # ========================== 配置 ==========================
+script_dir = os.path.dirname(os.path.abspath(__file__))
 raw_data_path = "/home/wangluffy/projects/GNTD/data/tissue"
 PPI_data_path = "/home/wangluffy/projects/GNTD/data/BIOGRID-ORGANISM-Mus_musculus-4.4.209.tab3.txt"
 
 rank_list = [128]
-l_list   = [0.08,0.09,0.1,0.11,0.12,0.13]
-
-output_dir = "results_GNTD_mouse_ARI"
+l_list = [0.09, 0.1, 0.11]
+#l_list = [0.08, 0.09, 0.1, 0.11, 0.12, 0.13]
+base_seed = 42
+output_dir = os.path.join(script_dir, "results_GNTD_mouse_ARI")
 os.makedirs(output_dir, exist_ok=True)
+
+# 先固定一次全局随机性
+set_global_determinism(base_seed)
 
 print(f"即将运行 {len(l_list)} × {len(rank_list)} = {len(l_list)*len(rank_list)} 个实验\n")
 
 # =========================================================
 
+model = GNTD(raw_data_path, PPI_data_path)
+print("开始预处理（仅执行一次）...")
+model.preprocess(use_coexpression=False, n_top_genes=3000, load_labels=True)
+print("预处理完成。\n")
+
 for l in l_list:
     for rank in rank_list:
+        run_seed = seed_from_config(rank=rank, l_value=l, base_seed=base_seed)
+        set_global_determinism(run_seed)
+
         print(f"\n{'='*85}")
-        print(f"正在运行： lambda = {l} ,  rank = {rank}")
+        print(f"正在运行： lambda = {l} ,  rank = {rank} , seed = {run_seed}")
         print(f"{'='*85}")
-
-        model = GNTD(raw_data_path, PPI_data_path)
-
-        print("开始预处理...")
-        model.preprocess(use_coexpression=False, n_top_genes=3000, load_labels=True)
-        print("预处理完成。\n")
 
         print("开始插补训练...")
         best_mse = model.impute(rank=rank, l=l, lr=0.003, max_epoch=3000, verbose=True)
@@ -49,10 +91,10 @@ for l in l_list:
         ground_truth = model.mapping[spot_idx, -1].astype(int)
 
         n_clusters = len(np.unique(ground_truth[ground_truth >= 0]))
-        pca = PCA(n_components=min(20, expr_mat.shape[1]), random_state=42)
+        pca = PCA(n_components=min(20, expr_mat.shape[1]), random_state=run_seed)
         expr_pca = pca.fit_transform(expr_mat)
 
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=20)
+        kmeans = KMeans(n_clusters=n_clusters, random_state=run_seed, n_init=20)
         clustering_labels = kmeans.fit_predict(expr_pca)
 
         ari_value = adjusted_rand_score(ground_truth, clustering_labels)
@@ -61,9 +103,11 @@ for l in l_list:
         # ====================== 保存结果 ======================
         savefile_name = os.path.join(
             output_dir,
-            f"GNTD_l{l}_r{rank}_MSE{best_mse:.5f}_ARI{ari_value:.5f}.mat"
+            f"GNTD_l{l}_r{rank}_S{run_seed}_MSE{best_mse:.5f}_ARI{ari_value:.5f}.mat"
         )
 
+        # 兜底：防止执行过程中工作目录变化导致相对路径失效
+        os.makedirs(output_dir, exist_ok=True)
         savemat(savefile_name, {
             "expr_mat": expr_mat,
             "expr_raw_mat": expr_raw_mat,
@@ -76,7 +120,8 @@ for l in l_list:
             "ARI": ari_value,
             "best_mse": best_mse,
             "lambda": l,
-            "rank": rank
+            "rank": rank,
+            "seed": run_seed,
         })
 
         print(f"✅ 保存完成：{savefile_name}\n")
