@@ -66,7 +66,7 @@ from GNTD import GNTD
 raw_data_path = "<data-folder>/<tissue-folder>" # Path to spatial expression data
 PPI_data_path = "<data-folder>/BIOGRID-ORGANISM-<species>-4.4.209.tab3.txt # Path to PPI data
 
-rank = 128 # tensor rank
+tucker_rank = (48, 32, 32) # Tucker rank along (g, x, y)
 l = 0.1 # weight on graph regularization
 
 model = GNTD(raw_data_path, PPI_data_path) # GNTD class initialization
@@ -76,7 +76,10 @@ model.preprocess() # Preprocessing, by default this function only prepares spati
                    # use_highly_variable = False to get spatial gene expression
                    # for all genes
 
-model.impute(rank, l) # Imputation
+model.impute(tucker_rank, l) # Imputation
+
+# Backward compatibility:
+# model.impute(128, l) also works and uses the same rank on all three modes.
 
 expr_mat, gene_names = model.get_imputed_expr_mat() # Return a spot by gene imputed expression matrix
                                                     # and corresponding gene names, where spots in the 
@@ -96,7 +99,12 @@ model.preprocess(n_top_genes=3000) # To obtain better clustering performance, we
                                    # selection (scanpy) in the following link:
                                    # https://scanpy.readthedocs.io/en/stable/generated/scanpy.pp.highly_variable_genes.html
                                    
-model.impute(rank, l) # Imputation (Runtime: ~2mins)
+model.impute(tucker_rank, l) # Imputation (Runtime: ~2mins)
+
+# Parameter search recommendation:
+# 1. First do a coarse search over tucker_rank and lambda.
+# 2. Select the setting with the highest ARI / lowest validation MSE.
+# 3. Then refine the search around the best lambda and nearby Tucker ranks.
 ```
 
 #### Code snippet for spot clustering with mclust
@@ -143,7 +151,7 @@ Gene visualization in the imputed spatial transcriptomics data
 model.preprocess(use_highly_variable=False, use_all_entries=True) # Please set use_highly_variable=False to obtain 
                                                                   # expression profile for all genes
 
-model.impute(rank, l) # Imputation (Runtime: ~10mins)
+model.impute(tucker_rank, l) # Imputation (Runtime: ~10mins)
 ```
 
 #### Code snippet for marker gene visualization
@@ -183,4 +191,3 @@ axs[1].set_title('Imputation', fontsize=16)
 Reference
 --------------------------------------------------------------------------------
 [GNTD: Reconstructing Spatial Transcriptomes with Graph-guided Neural Tensor Decomposition Informed by Spatial and Functional Relations](https://www.nature.com/articles/s41467-023-44017-0), Tianci Song, Charles Broadbent and Rui Kuang, Nature Communications, 14, Article number: 8276 (2023)
-

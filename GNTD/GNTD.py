@@ -1,3 +1,4 @@
+import os
 import torch
 import warnings
 import numpy as np
@@ -71,23 +72,24 @@ class GNTD():
         self.optimizer.zero_grad()
         
         expr = expr.to(self.device, dtype=torch.float32)
-        x, y, g, expr_tensor_hat = self.model(x_index, y_index, g_index)
+        _, _, g, spatial_basis, expr_tensor_hat = self.model(x_index, y_index, g_index)
         expr_hat = torch.flatten(expr_tensor_hat)
         expr_hat = expr_hat[index].squeeze(-1)
 
         # Recontruction loss
         loss = F.mse_loss(expr, expr_hat, reduction="sum")
 
-        # Cartesian product graph Laplacian regularization
-        gTLg = torch.matmul(torch.matmul(g.t(), self.L_g.to(self.device)), g)
+        # Tucker-compatible graph Laplacian regularization.
+        gTLg = torch.matmul(torch.matmul(g.t(), self.L_g_device), g)
         gTg = torch.matmul(g.t(), g)
-        xTx = torch.matmul(x.t(), x)
-        yTy = torch.matmul(y.t(), y)
-        xy = torch.kron(x, torch.ones(y.size(dim=0), 1).to(self.device)) * torch.kron(torch.ones(x.size(dim=0), 1).to(self.device), y)
-        xyTLxy = torch.matmul(torch.matmul(xy.t(), self.L_xy.to(self.device)), xy)
+        spatial_gram = torch.matmul(spatial_basis.t(), spatial_basis)
+        spatial_laplacian = torch.matmul(
+            spatial_basis.t(),
+            torch.matmul(self.L_xy_device, spatial_basis),
+        )
 
         # Total loss
-        loss += self.l*torch.sum(gTLg*xTx*yTy + gTg*xyTLxy)
+        loss += self.l * torch.sum(gTLg * spatial_gram + gTg * spatial_laplacian)
 
         loss.backward()
         self.optimizer.step()
@@ -99,7 +101,7 @@ class GNTD():
         
         self.model.eval()
         
-        _, _, _, expr_tensor_hat = self.model(x_index, y_index, g_index)
+        _, _, _, _, expr_tensor_hat = self.model(x_index, y_index, g_index)
         expr_hat = torch.flatten(expr_tensor_hat)
         expr_hat = expr_hat[index].squeeze(-1)
         expr_hat = expr_hat.cpu()
@@ -119,7 +121,7 @@ class GNTD():
         
         self.model.eval()
         
-        _, _, _, expr_tensor_hat = self.model(x_index, y_index, g_index)
+        _, _, _, _, expr_tensor_hat = self.model(x_index, y_index, g_index)
         expr_tensor_hat = expr_tensor_hat.cpu()
 
         return expr_tensor_hat
@@ -127,14 +129,15 @@ class GNTD():
     def impute(self, rank, l, lr=0.05, max_epoch=3000, verbose=True):  # 注意缩进：在类内部
         
         '''
-        rank: tensor rank
+        rank: Tucker rank. Can be one integer or a tuple/list (L, M, N)
+              for the gene, x, and y modes
         l: weight on Cartesian product graph Laplacian regularization
         lr: learning rate
         max_epoch: number of maximum epochs
         '''
         
         # Model parameters
-        self.rank = rank
+        self.rank = NTD._parse_tucker_rank(rank)
         self.l = l
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -148,6 +151,10 @@ class GNTD():
         y_index = torch.arange(self.n_y, dtype=torch.long).to(self.device)
         
         training_expr, training_index, validation_expr, validation_index = self.__training_valiation_split()
+        training_index = training_index.to(self.device)
+        validation_index = validation_index.to(self.device)
+        self.L_g_device = self.L_g.to(self.device)
+        self.L_xy_device = self.L_xy.to(self.device)
         
         self.model = NTD(self.n_x, self.n_y, self.n_g, self.rank).to(self.device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
@@ -155,9 +162,10 @@ class GNTD():
         # Print core model structure
         if self.verbose:
             print(self.model)
+            print(f"Tucker rank (g, x, y): {self.rank}")
 
         # Model selection
-        checkpoint = "./best_checkpoint.pt"
+        checkpoint = os.path.join(os.path.dirname(os.path.abspath(__file__)), "best_checkpoint.pt")
         
         pbar = tqdm(range(self.max_epoch))
         
@@ -169,7 +177,7 @@ class GNTD():
             loss = self.__train(training_expr, training_index, x_index, y_index, g_index)
             mse, mae, rmse, mape, r2 = self.__validate(validation_expr, validation_index, x_index, y_index, g_index)
             
-            if verbose:
+            if self.verbose:
                 pbar.set_postfix({'loss': loss, 'val_mse': mse})
                 
             # Save checkpoint
@@ -183,7 +191,7 @@ class GNTD():
         self.best_mse = best_mse
 
         # Output imputation
-        self.model.load_state_dict(torch.load(checkpoint))
+        self.model.load_state_dict(torch.load(checkpoint, map_location=self.device))
         expr_tensor_hat = self.__test(x_index, y_index, g_index)
         self.expr_tensor_hat = expr_tensor_hat
         
