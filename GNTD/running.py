@@ -73,18 +73,13 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 raw_data_path = "/home/wangluffy/projects/GNTD/data/tissue"
 PPI_data_path = "/home/wangluffy/projects/GNTD/data/BIOGRID-ORGANISM-Mus_musculus-4.4.209.tab3.txt"
 
-# Tucker rank = (L, M, N), corresponding to the latent dimensions of
-# gene / x / y modes. This round performs a final local refinement
-# around the current best point M = N = 44.
+# Final selected Tucker parameter setting based on ARI search results.
 tucker_rank_list = [
     (48, 43, 43),
-    (48, 44, 44),
-    (48, 45, 45),
 ]
 
-# The best lambda is now around 0.010, so this round refines the local
-# neighborhood on both sides of that value.
-l_list = [0.008, 0.009, 0.010, 0.011, 0.012, 0.014]
+# Final selected graph regularization weight.
+l_list = [0.009]
 
 base_seed = 42
 clustering_seed = 42
