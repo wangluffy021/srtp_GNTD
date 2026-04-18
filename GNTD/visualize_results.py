@@ -13,7 +13,7 @@ os.makedirs(figures_dir, exist_ok=True)
 
 # 需要可视化的基因（可自行增删）
 genes_to_visualize = ['gfap', 'syn1', 'mbp', 'nefh', 'lamp2']
-target_tucker_rank = None  # 例如：(48, 32, 32)，为 None 时自动汇总所有 Tucker rank
+target_tucker_rank = (48, 43, 43)
 
 print("正在加载 Tucker 分解实验结果...\n")
 
@@ -161,6 +161,48 @@ expr_imputed = best_data['expr_mat']
 expr_raw = best_data.get('expr_raw_mat')
 x_coords = best_data['x_coords'].flatten()
 y_coords = best_data['y_coords'].flatten()
+clustering_labels = np.asarray(best_data.get('clustering_labels', np.array([]))).flatten()
+ground_truth = np.asarray(best_data.get('ground_truth', np.array([]))).flatten()
+
+# ====================== 3. 生成最佳模型聚类图 ======================
+if clustering_labels.size == x_coords.size:
+    print("正在生成最佳模型聚类图...\n")
+
+    if ground_truth.size == x_coords.size:
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+        ax = axes[0]
+        sc = ax.scatter(x_coords, y_coords, c=ground_truth, cmap='tab20', s=28, alpha=0.9)
+        ax.set_title('Ground Truth Clusters')
+        ax.invert_yaxis()
+        ax.set_xticks([]); ax.set_yticks([])
+        plt.colorbar(sc, ax=ax, fraction=0.046, pad=0.04, label='Cluster')
+
+        ax = axes[1]
+        sc = ax.scatter(x_coords, y_coords, c=clustering_labels, cmap='tab20', s=28, alpha=0.9)
+        ax.set_title(f'Predicted Clusters ({best_rank_label}, λ={best_lam})')
+        ax.invert_yaxis()
+        ax.set_xticks([]); ax.set_yticks([])
+        plt.colorbar(sc, ax=ax, fraction=0.046, pad=0.04, label='Cluster')
+
+        plt.suptitle(f'Best Clustering Result | ARI={best_ari:.4f}', fontsize=14)
+        plt.tight_layout()
+        cluster_fig_name = 'Best_Clustering_vs_GroundTruth.png'
+    else:
+        fig, ax = plt.subplots(figsize=(7, 6))
+        sc = ax.scatter(x_coords, y_coords, c=clustering_labels, cmap='tab20', s=28, alpha=0.9)
+        ax.set_title(f'Predicted Clusters ({best_rank_label}, λ={best_lam})')
+        ax.invert_yaxis()
+        ax.set_xticks([]); ax.set_yticks([])
+        plt.colorbar(sc, ax=ax, fraction=0.046, pad=0.04, label='Cluster')
+        plt.tight_layout()
+        cluster_fig_name = 'Best_Clustering_Result.png'
+
+    plt.savefig(os.path.join(figures_dir, cluster_fig_name), dpi=220, bbox_inches='tight')
+    plt.close()
+    print(f" 已保存: {cluster_fig_name}\n")
+else:
+    print("警告：结果文件中未找到可用的 clustering_labels，跳过聚类图生成。\n")
 
 for gene_lower in genes_to_visualize:
     if gene_lower not in gene_names_lower:
@@ -215,5 +257,6 @@ for gene_lower in genes_to_visualize:
 print(f"\n🎉 所有可视化完成！")
 print(f"最佳 ARI = {best_ari:.4f} （λ={best_lam}, {best_rank_label}）")
 print(f"折线图保存在：{figures_dir}/ARI_MSE_vs_Lambda_Tucker.png")
+print(f"聚类图保存在：{figures_dir}/ 文件夹")
 print(f"基因对比图保存在：{figures_dir}/ 文件夹（仅 Raw + Imputed）")
 print(f"推荐重点查看：GFAP、SYN1、MBP 的对比图")
